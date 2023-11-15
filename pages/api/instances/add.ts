@@ -1,9 +1,9 @@
 // Next.js API route support: https://nextjs.org/docs/api-routes/introduction
 import type { NextApiRequest, NextApiResponse } from 'next'
 import generator from 'megalodon'
-import { ACCESS_TOKEN, BASE_URL } from "../../../lib/config"
 import { PrismaClientKnownRequestError, PrismaClientValidationError } from '@prisma/client/runtime/library';
 import { prisma } from '../../../lib/prisma'
+import fs from 'fs';
 
 const dotenv = require('dotenv')
 dotenv.config()
@@ -75,6 +75,43 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
             return false
         }
     }
+
+    // function to save the image to disk for use later
+    // this gets called below when we get to storing the image to disk
+    async function imgToDisk(url: string, filePath: string): Promise<void> {
+        try {
+            //get the image
+            const response = await fetch(url);
+
+            //if no image throw error
+            if (!response.ok) {
+                throw new Error('Image failed to be fetched: ${response.status} ${response.statusText}');
+            }
+            
+            //convert to blob
+            const blob = await response.blob();
+
+            //make new locaL URL
+            const localURL = URL.createObjectURL(blob);
+
+            //create anchor and trigger download
+            const anchor = document.createElement('a');
+            anchor.href = localURL;
+            //we give the full path with name of the file
+            anchor.download = filePath || 'downloaded-image';
+            document.body.appendChild(anchor);
+            anchor.click();
+
+            //clean up all our stuff now
+            setTimeout(() => {
+                URL.revokeObjectURL(localURL);
+                document.body.removeChild(anchor);
+            }, 0);
+        }
+        catch (error) {
+
+        }
+    }
     
 
     // Run through the URI test and collect the data
@@ -84,8 +121,25 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
         res.status(400).json({ message: 'failed to verify URI', type: 'error' })
     } else {
         let cachedata = await testURI(instanceData.uri, instanceData.api_mode)
+        let imageLoc:string;
+        let hasImg:boolean = false;
         if (cachedata != false) {
             try {
+                //TODO: capture the thumbnail and store to disk to avoid having site to grab it and store it in webp (probably translate via next.js)
+                //make sure there is a thumbnail
+                if (cachedata.thumbnail != null){
+                    //grab the url to the image
+                    imageLoc = cachedata.thumbnail;
+                    hasImg = true;
+                }
+
+                //setup for saving the name of the file in the database and on disk
+                const filePath: string = './img/' + cachedata.title;
+
+                //if there is an image then we want to save it
+                if(hasImg){
+                    imgToDisk(imageLoc, filePath);
+                }
                 // Prepare the data to be saved to the database
                 const savedInstance = await prisma.instances.create({
                     data: {
@@ -99,7 +153,7 @@ export default async (req: NextApiRequest, res: NextApiResponse) => {
                             create: {
                                 title: cachedata.title,
                                 description: cachedata.description,
-                                thumbnail: cachedata.thumbnail,
+                                thumbnail: filePath,
                                 user_count: cachedata.user_count,
                                 status_count: cachedata.status_count,
                                 registrations: cachedata.registrations,
